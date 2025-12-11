@@ -4,11 +4,12 @@ import pandas as pd
 from dateutil import parser
 from datetime import datetime, timedelta
 import math
+import re
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Winter Logistics Pro", page_icon="🚛", layout="centered")
 
-# NWS Hourly Endpoints (Higher precision)
+# NWS Hourly Endpoints
 LOCATIONS = {
     "4th of July Pass": "https://api.weather.gov/gridpoints/OTX/168,102/forecast/hourly",
     "Lookout Pass": "https://api.weather.gov/gridpoints/MSO/56,102/forecast/hourly",
@@ -21,7 +22,7 @@ OUTBOUND_HOURS = [7, 8, 9, 10, 11, 12]
 RETURN_HOURS = [13, 14, 15, 16, 17, 18]
 
 # --- LOGIC ENGINE ---
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=900) # Cache for 15 mins (Lowered for wind updates)
 def fetch_hourly_data(url):
     try:
         headers = {'User-Agent': '(winter-logistics-tool, contact@example.com)'}
@@ -31,6 +32,15 @@ def fetch_hourly_data(url):
         return data['properties']['periods']
     except:
         return []
+
+def get_speed_int(speed_str):
+    """Extracts integer from '25 mph' string"""
+    if not speed_str: return 0
+    # Find all numbers
+    nums = re.findall(r'\d+', str(speed_str))
+    if nums:
+        return int(nums[0])
+    return 0
 
 def calculate_wind_chill(temp_f, speed_mph):
     if temp_f > 50 or speed_mph < 3:
@@ -42,9 +52,15 @@ def analyze_hour(row, location_name):
     alerts = []
     
     temp = row['temperature']
-    wind = int(row['windSpeed'].split()[0]) if 'windSpeed' in row else 0
     short_forecast = row['shortForecast'].lower()
     direction = row['windDirection']
+    
+    # WIND LOGIC (Updated to check Gusts)
+    sustained = get_speed_int(row.get('windSpeed', '0'))
+    gust = get_speed_int(row.get('windGust', '0')) # Check for specific gust field
+    
+    # Use the higher of the two for safety
+    effective_wind = max(sustained, gust)
     
     # 1. Road Surface Risk
     if "snow" in short_forecast or "ice" in short_forecast:
@@ -58,19 +74,27 @@ def analyze_hour(row, location_name):
         risk_score += 3
         alerts.append("🧊 FREEZING RAIN")
         
-    # 2. Wind Risk
-    if wind > 30:
+    # 2. Wind Risk (More Sensitive Thresholds)
+    if effective_wind >= 45:
+        risk_score += 2
+        alerts.append(f"💨 GUSTS {effective_wind} MPH")
+    elif effective_wind >= 30:
         risk_score += 1
-        alerts.append(f"💨 Gusts {wind}+")
-    
-    # 3. Crosswind Specific
-    if "McDonald" in location_name and wind > 25:
+        alerts.append(f"💨 Windy ({effective_wind})")
+    elif "breezy" in short_forecast or "windy" in short_forecast:
+        # If text says windy but data is missing, warn anyway
+        if effective_wind < 20: 
+             alerts.append("💨 Breezy")
+
+    # 3. Crosswind Specific (McDonald Pass)
+    # McDonald Pass is dangerous even at 25mph if direction is N/S
+    if "McDonald" in location_name and effective_wind > 20:
         if direction in ['N', 'NNE', 'NNW', 'S', 'SSE', 'SSW']:
             risk_score += 1
             alerts.append("↔️ CROSSWIND")
 
     # 4. Wind Chill
-    wc = calculate_wind_chill(temp, wind)
+    wc = calculate_wind_chill(temp, effective_wind)
     if wc < 0:
         risk_score += 1
         alerts.append(f"🥶 Chill {int(wc)}°")
@@ -80,13 +104,12 @@ def analyze_hour(row, location_name):
     if risk_score >= 2: status = "🟠"
     if risk_score >= 3: status = "🔴"
     
-    return status, ", ".join(alerts), risk_score
+    return status, ", ".join(alerts), risk_score, effective_wind
 
 # --- UI START ---
 st.title("🚛 Route Safety Commander")
 
 # --- TIMEZONE FIX ---
-# Use Pandas to get the current time in Pacific
 try:
     now_pt = pd.Timestamp.now(tz='America/Los_Angeles')
     st.caption(f"Last System Check: {now_pt.strftime('%I:%M %p PT')}")
@@ -99,7 +122,7 @@ if not ref_data:
     st.error("Offline. Check connection.")
     st.stop()
 
-# --- DATE LOGIC (Correct Order) ---
+# --- DATE LOGIC ---
 unique_dates = []
 seen_dates = set()
 
@@ -128,9 +151,10 @@ for name, url in LOCATIONS.items():
         date_str = dt.strftime('%A, %b %d')
         
         if date_str == selected_date_str:
-            status, alert, score = analyze_hour(hour, name)
+            status, alert, score, wind_val = analyze_hour(hour, name)
             
             h = dt.hour
+            # Check risk only during drive times
             if h in OUTBOUND_HOURS or h in RETURN_HOURS:
                 if score > max_risk: max_risk = score
             
@@ -139,7 +163,7 @@ for name, url in LOCATIONS.items():
                 "Time": dt.strftime('%I %p'),
                 "Temp": f"{hour['temperature']}°",
                 "Weather": hour['shortForecast'],
-                "Wind": f"{hour['windSpeed']} {hour['windDirection']}",
+                "Wind": f"{wind_val} {hour['windDirection']}",
                 "Status": status,
                 "Alerts": alert
             })
@@ -155,10 +179,8 @@ if overall_risk == 0:
     st.success("✅ MISSION STATUS: GO")
 elif overall_risk == 1:
     st.warning("⚠️ MISSION STATUS: CAUTION")
-elif overall_risk == 2:
+elif overall_risk >= 2:
     st.error("🛑 MISSION STATUS: HIGH RISK")
-else:
-    st.error("🚨 MISSION STATUS: NO-GO")
 st.write("---")
 
 # --- SECTION 2: THE DRIVE ---
@@ -177,7 +199,7 @@ def render_trip_table(hours_filter, title):
                 header_icon = "⚠️" if leg_risk else "✅"
                 
                 with st.expander(f"{header_icon} {name}", expanded=leg_risk):
-                    display_df = trip_df[['Time', 'Temp', 'Status', 'Alerts', 'Weather']]
+                    display_df = trip_df[['Time', 'Temp', 'Status', 'Alerts', 'Wind', 'Weather']]
                     st.dataframe(display_df, hide_index=True, use_container_width=True)
 
 with tab_out:
@@ -204,6 +226,3 @@ with tab_full:
 
 st.markdown("---")
 st.markdown("**Essential Links:** [Idaho 511](https://511.idaho.gov/) | [MDT Maps](https://www.mdt.mt.gov/travinfo/)")
-
-
-
