@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import math
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Winter Logistics Pro", page_icon="🚛", layout="mobile")
+st.set_page_config(page_title="Winter Logistics Pro", page_icon="🚛", layout="centered")
 
 # NWS Hourly Endpoints (Higher precision)
 LOCATIONS = {
@@ -204,4 +204,5 @@ with tab_full:
 
 # --- FOOTER ---
 st.markdown("---")
+
 st.markdown("**Essential Links:** [Idaho 511](https://511.idaho.gov/) | [MDT Maps](https://www.mdt.mt.gov/travinfo/)")
