@@ -84,7 +84,14 @@ def analyze_hour(row, location_name):
 
 # --- UI START ---
 st.title("🚛 Route Safety Commander")
-st.caption(f"Last System Check: {datetime.now().strftime('%H:%M')}")
+
+# --- TIMEZONE FIX ---
+# Use Pandas to get the current time in Pacific
+try:
+    now_pt = pd.Timestamp.now(tz='America/Los_Angeles')
+    st.caption(f"Last System Check: {now_pt.strftime('%I:%M %p PT')}")
+except:
+    st.caption(f"Last System Check: {datetime.now().strftime('%I:%M %p UTC')}")
 
 # 1. MASTER DATE SELECTOR
 ref_data = fetch_hourly_data(LOCATIONS["McDonald Pass"])
@@ -92,19 +99,17 @@ if not ref_data:
     st.error("Offline. Check connection.")
     st.stop()
 
-# --- FIX: LOGIC TO KEEP DATES IN ORDER ---
+# --- DATE LOGIC (Correct Order) ---
 unique_dates = []
 seen_dates = set()
 
 for p in ref_data:
-    # NWS returns data in chronological order. We just need to grab them in that order.
     dt = parser.parse(p['startTime'])
     date_str = dt.strftime('%A, %b %d')
     if date_str not in seen_dates:
         seen_dates.add(date_str)
         unique_dates.append(date_str)
 
-# Now the list is [Thursday, Friday, Saturday...] instead of Alphabetical
 selected_date_str = st.selectbox("📅 Plan for:", unique_dates[:5])
 
 # --- DATA PROCESSING ---
