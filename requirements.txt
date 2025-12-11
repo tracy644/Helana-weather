@@ -1,0 +1,10 @@
+streamlit
+yfinance
+pandas
+pandas_ta
+plotly
+numpy
+streamlit
+requests
+pandas
+dateutil
