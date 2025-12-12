@@ -46,19 +46,6 @@ def get_int(val):
         return int(nums[0])
     return 0
 
-def get_wind_arrow(direction):
-    """Converts compass direction to arrow"""
-    d = direction.upper()
-    if 'N' in d and 'E' in d: return "↗️"
-    if 'N' in d and 'W' in d: return "↖️"
-    if 'S' in d and 'E' in d: return "↘️"
-    if 'S' in d and 'W' in d: return "↙️"
-    if 'N' in d: return "⬆️"
-    if 'S' in d: return "⬇️"
-    if 'E' in d: return "➡️"
-    if 'W' in d: return "⬅️"
-    return ""
-
 def add_weather_icon(forecast_text):
     text = forecast_text.lower()
     icon = ""
@@ -126,8 +113,7 @@ def analyze_hour(row, location_name, trip_direction):
             risk_score += 1
             alerts.append("↔️ CROSSWIND")
 
-    # 4. Sun Glare Logic (New!)
-    # Eastbound AM (7-10am) or Westbound PM (3-6pm) with Clear Skies
+    # 4. Sun Glare Logic
     hour_int = parser.parse(row['startTime']).hour
     if "sunny" in short_forecast or "clear" in short_forecast:
         if trip_direction == "East" and 7 <= hour_int <= 10:
@@ -209,9 +195,10 @@ for name, url in LOCATIONS.items():
             
             # Formatting
             weather_icon = add_weather_icon(hour['shortForecast'])
-            wind_arrow = get_wind_arrow(hour['windDirection'])
-            wind_display = f"{wind_o} {wind_arrow}"
+            wind_text = hour['windDirection'] # Use text directly (e.g., "NNW")
+            wind_display = f"{wind_o} {wind_text}"
             time_display = dt.strftime('%I %p')
+            
             # Add Moon if Night
             if not day_o: time_display = f"🌑 {time_display}"
             else: time_display = f"☀️ {time_display}"
@@ -221,7 +208,7 @@ for name, url in LOCATIONS.items():
                 "Time": time_display,
                 "Temp": f"{hour['temperature']}°",
                 "Precip %": f"{pop_o}%" if pop_o > 0 else "-",
-                "Wind": wind_display,
+                "Wind from": wind_display,
                 "Weather": weather_icon,
                 "Status (Out)": stat_o,
                 "Alerts (Out)": alert_o,
@@ -275,7 +262,7 @@ def render_trip_table(hours_filter, title, location_order, direction_key):
                 trip_df = trip_df.rename(columns={status_col: "Status", alert_col: "Alerts"})
                 
                 with st.expander(f"{header_icon} {name}", expanded=leg_risk):
-                    display_df = trip_df[['Time', 'Temp', 'Precip %', 'Wind', 'Weather', 'Alerts']]
+                    display_df = trip_df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']]
                     st.dataframe(display_df, hide_index=True, use_container_width=True)
 
 with tab_out:
@@ -300,7 +287,7 @@ with tab_full:
     if location_select in processed_data_out:
         df = processed_data_out[location_select]
         df = df.rename(columns={"Status (Out)": "Status", "Alerts (Out)": "Alerts"})
-        st.dataframe(df[['Time', 'Temp', 'Precip %', 'Wind', 'Weather', 'Alerts']], hide_index=True)
+        st.dataframe(df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']], hide_index=True)
 
 st.markdown("---")
 st.markdown("**Essential Links:** [Idaho 511](https://511.idaho.gov/) | [MDT Maps](https://www.mdt.mt.gov/travinfo/)")
