@@ -26,7 +26,6 @@ ORDER_WESTBOUND = ["McDonald Pass", "Missoula Valley", "Lookout Pass", "4th of J
 
 # Travel Windows (24h format)
 OUTBOUND_HOURS = [7, 8, 9, 10, 11, 12]
-# Added 12 to return hours per request
 RETURN_HOURS = [12, 13, 14, 15, 16, 17, 18]
 
 # --- LOGIC ENGINE ---
@@ -213,6 +212,9 @@ elif overall_risk == 1:
 elif overall_risk >= 2:
     st.error("🛑 MISSION STATUS: HIGH RISK")
 st.write("---")
+
+# ADDED TIMEZONE NOTICE HERE
+st.info("🕒 **Note:** All times listed are **LOCAL** to that specific pass (Pacific for ID, Mountain for MT).")
 
 # --- SECTION 2: THE DRIVE ---
 tab_out, tab_ret, tab_full = st.tabs(["🚀 Outbound (AM)", "↩️ Return (PM)", "📋 Details"])
