@@ -17,9 +17,17 @@ LOCATIONS = {
     "McDonald Pass": "https://api.weather.gov/gridpoints/TFX/62,50/forecast/hourly"
 }
 
-# Travel Windows
+# --- ROUTE ORDER DEFINITIONS ---
+# Eastbound: ID -> MT
+ORDER_EASTBOUND = ["4th of July Pass", "Lookout Pass", "Missoula Valley", "McDonald Pass"]
+
+# Westbound: MT -> ID (Reverse Order)
+ORDER_WESTBOUND = ["McDonald Pass", "Missoula Valley", "Lookout Pass", "4th of July Pass"]
+
+# Travel Windows (24h format)
 OUTBOUND_HOURS = [7, 8, 9, 10, 11, 12]
-RETURN_HOURS = [13, 14, 15, 16, 17, 18]
+# Added 12 to return hours per request
+RETURN_HOURS = [12, 13, 14, 15, 16, 17, 18]
 
 # --- LOGIC ENGINE ---
 @st.cache_data(ttl=900) 
@@ -209,10 +217,11 @@ st.write("---")
 # --- SECTION 2: THE DRIVE ---
 tab_out, tab_ret, tab_full = st.tabs(["🚀 Outbound (AM)", "↩️ Return (PM)", "📋 Details"])
 
-def render_trip_table(hours_filter, title):
+def render_trip_table(hours_filter, title, location_order):
     st.subheader(title)
     
-    for name in LOCATIONS.keys():
+    # Use the specific order passed to the function
+    for name in location_order:
         if name in processed_data:
             df = processed_data[name]
             trip_df = df[df['Hour'].isin(hours_filter)]
@@ -227,10 +236,10 @@ def render_trip_table(hours_filter, title):
                     st.dataframe(display_df, hide_index=True, use_container_width=True)
 
 with tab_out:
-    render_trip_table(OUTBOUND_HOURS, f"Eastbound: {selected_date_str}")
+    render_trip_table(OUTBOUND_HOURS, f"Eastbound: {selected_date_str}", ORDER_EASTBOUND)
 
 with tab_ret:
-    render_trip_table(RETURN_HOURS, f"Westbound: {selected_date_str}")
+    render_trip_table(RETURN_HOURS, f"Westbound: {selected_date_str}", ORDER_WESTBOUND)
     
     # SURVIVAL CHECK
     mcd_df = processed_data.get("McDonald Pass")
