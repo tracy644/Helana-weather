@@ -36,15 +36,26 @@ def fetch_hourly_data(url):
 def get_int(val):
     """Safely extracts integer from string or dict"""
     if val is None: return 0
-    # If it's a dict (sometimes NWS sends unit codes)
     if isinstance(val, dict) and 'value' in val:
         val = val['value']
-    
-    # If it's a string like "20 mph"
     nums = re.findall(r'\d+', str(val))
     if nums:
         return int(nums[0])
     return 0
+
+def add_weather_icon(forecast_text):
+    """Adds visual icons to text for faster reading"""
+    text = forecast_text.lower()
+    icon = ""
+    if "snow" in text: icon = "🌨️"
+    elif "rain" in text: icon = "🌧️"
+    elif "shower" in text: icon = "🌦️"
+    elif "cloud" in text: icon = "☁️"
+    elif "clear" in text or "sunny" in text: icon = "☀️"
+    elif "fog" in text: icon = "🌫️"
+    elif "wind" in text: icon = "💨"
+    
+    return f"{icon} {forecast_text}"
 
 def calculate_wind_chill(temp_f, speed_mph):
     if temp_f > 50 or speed_mph < 3:
@@ -67,7 +78,7 @@ def analyze_hour(row, location_name):
     # PRECIP CHANCE
     pop = get_int(row.get('probabilityOfPrecipitation', 0))
     
-    # 1. Road Surface Risk
+    # 1. Road Surface Risk & Black Ice
     if "snow" in short_forecast or "ice" in short_forecast:
         if temp <= 32:
             risk_score += 2
@@ -75,9 +86,15 @@ def analyze_hour(row, location_name):
         else:
             risk_score += 1
             alerts.append("💧 Slush")
-    elif "rain" in short_forecast and temp <= 34:
-        risk_score += 3
-        alerts.append("🧊 FREEZING RAIN")
+            
+    elif "rain" in short_forecast:
+        if temp <= 32:
+            risk_score += 3
+            alerts.append("🧊 FREEZING RAIN")
+        elif temp <= 37:
+            # BLACK ICE ZONE: Air is warm, ground might be frozen
+            risk_score += 1
+            alerts.append("🧊 Possible Black Ice")
         
     # 2. Wind Risk
     if effective_wind >= 45:
@@ -161,13 +178,15 @@ for name, url in LOCATIONS.items():
             if h in OUTBOUND_HOURS or h in RETURN_HOURS:
                 if score > max_risk: max_risk = score
             
+            weather_display = add_weather_icon(hour['shortForecast'])
+            
             day_rows.append({
                 "Hour": dt.hour,
                 "Time": dt.strftime('%I %p'),
                 "Temp": f"{hour['temperature']}°",
-                "Chance": f"{pop_val}%" if pop_val > 0 else "-",
+                "Precip %": f"{pop_val}%" if pop_val > 0 else "-",
                 "Wind": f"{wind_val} {hour['windDirection']}",
-                "Weather": hour['shortForecast'],
+                "Weather": weather_display,
                 "Status": status,
                 "Alerts": alert
             })
@@ -203,8 +222,8 @@ def render_trip_table(hours_filter, title):
                 header_icon = "⚠️" if leg_risk else "✅"
                 
                 with st.expander(f"{header_icon} {name}", expanded=leg_risk):
-                    # NEW COLUMN ORDER: Time | Temp | Chance | Wind | Weather | Alerts
-                    display_df = trip_df[['Time', 'Temp', 'Chance', 'Wind', 'Weather', 'Alerts']]
+                    # NEW COLUMN ORDER: Time | Temp | Precip % | Wind | Weather | Alerts
+                    display_df = trip_df[['Time', 'Temp', 'Precip %', 'Wind', 'Weather', 'Alerts']]
                     st.dataframe(display_df, hide_index=True, use_container_width=True)
 
 with tab_out:
@@ -227,7 +246,7 @@ with tab_full:
     st.write("Full 24-hour breakdown for all passes.")
     location_select = st.selectbox("Select Location", list(LOCATIONS.keys()))
     if location_select in processed_data:
-        st.dataframe(processed_data[location_select][['Time', 'Temp', 'Chance', 'Wind', 'Weather', 'Alerts']], hide_index=True)
+        st.dataframe(processed_data[location_select][['Time', 'Temp', 'Precip %', 'Wind', 'Weather', 'Alerts']], hide_index=True)
 
 st.markdown("---")
 st.markdown("**Essential Links:** [Idaho 511](https://511.idaho.gov/) | [MDT Maps](https://www.mdt.mt.gov/travinfo/)")
