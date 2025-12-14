@@ -230,15 +230,3 @@ for name, url in LOCATIONS.items():
                 if score_o > max_risk: max_risk = score_o
                 if score_o >= 1: 
                     for r in reasons_o: summary_hazards.add(f"{r} at {name}")
-            
-            if h in RETURN_HOURS:
-                if score_r > max_risk: max_risk = score_r
-                if score_r >= 1:
-                    for r in reasons_r: summary_hazards.add(f"{r} at {name}")
-            
-            # Formatting
-            weather_icon = add_weather_icon(hour['shortForecast'])
-            wind_display = f"{wind_o} {hour['windDirection']}"
-            time_display = dt.strftime('%I %p')
-            if not day_o: time_display = f"🌑 {time_display}"
-            el
