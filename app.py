@@ -9,6 +9,14 @@ import re
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Winter Logistics Pro", page_icon="🚛", layout="centered")
 
+# Coordinates for Alert Checking (Lat, Lon)
+COORDINATES = {
+    "4th of July Pass": "47.548,-116.503",
+    "Lookout Pass": "47.456,-115.696",
+    "Missoula Valley": "46.916,-114.090",
+    "McDonald Pass": "46.586,-112.311"
+}
+
 # NWS Hourly Endpoints
 LOCATIONS = {
     "4th of July Pass": "https://api.weather.gov/gridpoints/OTX/168,102/forecast/hourly",
@@ -17,11 +25,11 @@ LOCATIONS = {
     "McDonald Pass": "https://api.weather.gov/gridpoints/TFX/62,50/forecast/hourly"
 }
 
-# --- ROUTE ORDER DEFINITIONS ---
+# Route Orders
 ORDER_EASTBOUND = ["4th of July Pass", "Lookout Pass", "Missoula Valley", "McDonald Pass"]
 ORDER_WESTBOUND = ["McDonald Pass", "Missoula Valley", "Lookout Pass", "4th of July Pass"]
 
-# Travel Windows (24h format)
+# Travel Windows
 OUTBOUND_HOURS = [7, 8, 9, 10, 11, 12]
 RETURN_HOURS = [12, 13, 14, 15, 16, 17, 18, 19]
 
@@ -32,19 +40,37 @@ def fetch_hourly_data(url):
         headers = {'User-Agent': '(winter-logistics-tool, contact@example.com)'}
         r = requests.get(url, headers=headers, timeout=5)
         r.raise_for_status()
+        return r.json()['properties']['periods']
+    except:
+        return []
+
+@st.cache_data(ttl=300) # Cache alerts for only 5 mins (Urgent!)
+def fetch_active_alerts(lat_lon_str):
+    """Checks for official NWS Warnings"""
+    url = f"https://api.weather.gov/alerts/active?point={lat_lon_str}"
+    try:
+        headers = {'User-Agent': '(winter-logistics-tool, contact@example.com)'}
+        r = requests.get(url, headers=headers, timeout=5)
+        r.raise_for_status()
         data = r.json()
-        return data['properties']['periods']
+        
+        alerts = []
+        features = data.get('features', [])
+        for f in features:
+            props = f['properties']
+            event = props['event']
+            # Filter for meaningful travel hazards
+            if "Winter" in event or "Wind" in event or "Ice" in event or "Blizzard" in event or "Snow" in event:
+                alerts.append(event.upper())
+        return list(set(alerts)) # Remove duplicates
     except:
         return []
 
 def get_int(val):
     if val is None: return 0
-    if isinstance(val, dict) and 'value' in val:
-        val = val['value']
+    if isinstance(val, dict) and 'value' in val: val = val['value']
     nums = re.findall(r'\d+', str(val))
-    if nums:
-        return int(nums[0])
-    return 0
+    return int(nums[0]) if nums else 0
 
 def add_weather_icon(forecast_text):
     text = forecast_text.lower()
@@ -59,17 +85,13 @@ def add_weather_icon(forecast_text):
     return f"{icon} {forecast_text}"
 
 def calculate_wind_chill(temp_f, speed_mph):
-    if temp_f > 50 or speed_mph < 3:
-        return temp_f
+    if temp_f > 50 or speed_mph < 3: return temp_f
     return 35.74 + (0.6215 * temp_f) - (35.75 * math.pow(speed_mph, 0.16)) + (0.4275 * temp_f * math.pow(speed_mph, 0.16))
 
 def analyze_hour(row, location_name, trip_direction):
-    """
-    Returns risk info AND a specific 'reason' string for the summary
-    """
     risk_score = 0
     alerts = []
-    major_reasons = [] # For the top-level summary
+    major_reasons = []
     
     temp = row['temperature']
     short_forecast = row['shortForecast'].lower()
@@ -82,7 +104,7 @@ def analyze_hour(row, location_name, trip_direction):
     effective_wind = max(sustained, gust)
     pop = get_int(row.get('probabilityOfPrecipitation', 0))
     
-    # 1. Road Surface Risk
+    # 1. Road Surface
     if "snow" in short_forecast or "ice" in short_forecast:
         if temp <= 32:
             risk_score += 2
@@ -102,7 +124,7 @@ def analyze_hour(row, location_name, trip_direction):
             alerts.append("🧊 Possible Black Ice")
             major_reasons.append("Black Ice Risk")
         
-    # 2. Wind Risk
+    # 2. Wind
     if effective_wind >= 45:
         risk_score += 2
         alerts.append(f"💨 GUSTS {effective_wind} MPH")
@@ -114,14 +136,14 @@ def analyze_hour(row, location_name, trip_direction):
     elif "breezy" in short_forecast or "windy" in short_forecast:
         if effective_wind < 20: alerts.append("💨 Breezy")
 
-    # 3. Crosswind (McDonald Pass)
+    # 3. Crosswind
     if "McDonald" in location_name and effective_wind > 20:
         if direction in ['N', 'NNE', 'NNW', 'S', 'SSE', 'SSW']:
             risk_score += 1
             alerts.append("↔️ CROSSWIND")
             major_reasons.append("Crosswinds")
 
-    # 4. Sun Glare Logic
+    # 4. Sun Glare
     hour_int = parser.parse(row['startTime']).hour
     if "sunny" in short_forecast or "clear" in short_forecast:
         if trip_direction == "East" and 7 <= hour_int <= 10:
@@ -148,20 +170,20 @@ def analyze_hour(row, location_name, trip_direction):
 # --- UI START ---
 st.title("🚛 Route Safety Commander")
 
-# --- TIMEZONE FIX ---
+# Timezone Check
 try:
     now_pt = pd.Timestamp.now(tz='America/Los_Angeles')
     st.caption(f"Last System Check: {now_pt.strftime('%I:%M %p PT')}")
 except:
     st.caption(f"Last System Check: {datetime.now().strftime('%I:%M %p UTC')}")
 
-# 1. MASTER DATE SELECTOR
+# Check Connection
 ref_data = fetch_hourly_data(LOCATIONS["McDonald Pass"])
 if not ref_data:
     st.error("Offline. Check connection.")
     st.stop()
 
-# --- DATE LOGIC ---
+# Date Selector
 unique_dates = []
 seen_dates = set()
 for p in ref_data:
@@ -173,13 +195,26 @@ for p in ref_data:
 
 selected_date_str = st.selectbox("📅 Plan for:", unique_dates[:5])
 
-# --- DATA PROCESSING ---
+# --- ALERT & DATA PROCESSING ---
 daily_risks = []
 processed_data_out = {}
 processed_data_ret = {}
-summary_hazards = set() # Store unique hazards for the summary
+summary_hazards = set()
+official_alerts_found = []
 
 for name, url in LOCATIONS.items():
+    # 1. Check Official Alerts (The "Governor")
+    lat_lon = COORDINATES.get(name)
+    if lat_lon:
+        active_alerts = fetch_active_alerts(lat_lon)
+        if active_alerts:
+            for alert in active_alerts:
+                official_alerts_found.append(f"**{name}:** {alert}")
+                # If Warning, force max risk
+                if "WARNING" in alert: daily_risks.append(3)
+                elif "ADVISORY" in alert or "WATCH" in alert: daily_risks.append(2)
+
+    # 2. Check Hourly Data
     raw = fetch_hourly_data(url)
     if not raw: continue
     
@@ -193,16 +228,12 @@ for name, url in LOCATIONS.items():
         
         if date_str == selected_date_str:
             h = dt.hour
-            
-            # Analyze
             stat_o, alert_o, score_o, wind_o, pop_o, day_o, reasons_o = analyze_hour(hour, name, "East")
             stat_r, alert_r, score_r, wind_r, pop_r, day_r, reasons_r = analyze_hour(hour, name, "West")
             
-            # Check Risk & Collect Summary Reasons
-            # Only count reasons if they happen during drive time!
             if h in OUTBOUND_HOURS:
                 if score_o > max_risk: max_risk = score_o
-                if score_o >= 1: # Only report hazards if Risk is Yellow or higher
+                if score_o >= 1: 
                     for r in reasons_o: summary_hazards.add(f"{r} at {name}")
             
             if h in RETURN_HOURS:
@@ -212,10 +243,8 @@ for name, url in LOCATIONS.items():
             
             # Formatting
             weather_icon = add_weather_icon(hour['shortForecast'])
-            wind_text = hour['windDirection']
-            wind_display = f"{wind_o} {wind_text}"
+            wind_display = f"{wind_o} {hour['windDirection']}"
             time_display = dt.strftime('%I %p')
-            
             if not day_o: time_display = f"🌑 {time_display}"
             else: time_display = f"☀️ {time_display}"
 
@@ -231,7 +260,6 @@ for name, url in LOCATIONS.items():
                 "Status (Ret)": stat_r,
                 "Alerts (Ret)": alert_r
             }
-            
             day_rows_out.append(row_data)
             day_rows_ret.append(row_data)
     
@@ -239,45 +267,42 @@ for name, url in LOCATIONS.items():
     processed_data_ret[name] = pd.DataFrame(day_rows_ret)
     daily_risks.append(max_risk)
 
-# --- SECTION 1: MISSION DASHBOARD ---
+# --- DASHBOARD ---
 overall_risk = max(daily_risks) if daily_risks else 0
 
 st.write("---")
+
+# 1. DISPLAY OFFICIAL ALERTS FIRST (Priority)
+if official_alerts_found:
+    st.error("🚨 **OFFICIAL NWS ALERTS ACTIVE:**")
+    for alert in official_alerts_found:
+        st.write(f"- {alert}")
+    st.write("---")
+
+# 2. STATUS RATING
 if overall_risk == 0:
     st.success("✅ MISSION STATUS: GO")
-    st.caption("No significant weather hazards detected in the forecast.")
+    st.caption("No significant weather hazards detected.")
 elif overall_risk == 1:
     st.warning("⚠️ MISSION STATUS: CAUTION")
 elif overall_risk >= 2:
     st.error("🛑 MISSION STATUS: HIGH RISK")
 
-# THE SUMMARY ENGINE
+# 3. HOURLY HAZARD SUMMARY
 if overall_risk > 0 and summary_hazards:
-    # Group hazards to make them readable
-    # E.g. instead of listing "Wind at McDonald" 5 times, just say it once
-    # Using a set() already deduplicated exact matches, now we list them.
-    
-    # Sort them so they look nice
     hazard_list = sorted(list(summary_hazards))
-    
-    # Simple logic to shorten the list if it's too long
-    if len(hazard_list) > 4:
-        summary_text = ", ".join(hazard_list[:4]) + "..."
-    else:
-        summary_text = ", ".join(hazard_list)
-        
-    st.info(f"**Primary Hazards:** {summary_text}")
+    if len(hazard_list) > 4: summary_text = ", ".join(hazard_list[:4]) + "..."
+    else: summary_text = ", ".join(hazard_list)
+    st.info(f"**Hourly Risk Factors:** {summary_text}")
 
 st.write("---")
+st.info("🕒 **Note:** All times are **LOCAL** to that specific pass.")
 
-st.info("🕒 **Note:** All times are **LOCAL** to that specific pass (Pacific for ID, Mountain for MT).")
-
-# --- SECTION 2: THE DRIVE ---
+# --- TABS ---
 tab_out, tab_ret, tab_full = st.tabs(["🚀 Outbound (AM)", "↩️ Return (PM)", "📋 Details"])
 
 def render_trip_table(hours_filter, title, location_order, direction_key):
     st.subheader(title)
-    
     data_source = processed_data_out if direction_key == "Out" else processed_data_ret
     
     for name in location_order:
@@ -288,10 +313,8 @@ def render_trip_table(hours_filter, title, location_order, direction_key):
             if not trip_df.empty:
                 status_col = f"Status ({direction_key})"
                 alert_col = f"Alerts ({direction_key})"
-                
                 leg_risk = trip_df[status_col].astype(str).str.contains('🔴|🟠').any()
                 header_icon = "⚠️" if leg_risk else "✅"
-                
                 trip_df = trip_df.rename(columns={status_col: "Status", alert_col: "Alerts"})
                 
                 with st.expander(f"{header_icon} {name}", expanded=leg_risk):
@@ -304,7 +327,6 @@ with tab_out:
 with tab_ret:
     render_trip_table(RETURN_HOURS, f"Westbound: {selected_date_str}", ORDER_WESTBOUND, "Ret")
     
-    # SURVIVAL CHECK
     if "McDonald Pass" in processed_data_ret:
         mcd_df = processed_data_ret["McDonald Pass"]
         late_df = mcd_df[mcd_df['Hour'].isin([16, 17, 18, 19, 20])]
@@ -315,7 +337,7 @@ with tab_ret:
                 st.info(f"Note: McDonald Pass drops to {min_temp}°F by evening.")
 
 with tab_full:
-    st.write("Full 24-hour breakdown for all passes.")
+    st.write("Full 24-hour breakdown.")
     location_select = st.selectbox("Select Location", list(LOCATIONS.keys()))
     if location_select in processed_data_out:
         df = processed_data_out[location_select]
