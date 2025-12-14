@@ -9,7 +9,7 @@ import re
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Winter Logistics Pro", page_icon="🚛", layout="centered")
 
-# Coordinates for Alert Checking (Lat, Lon)
+# Coordinates (for Alerts)
 COORDINATES = {
     "4th of July Pass": "47.548,-116.503",
     "Lookout Pass": "47.456,-115.696",
@@ -17,12 +17,32 @@ COORDINATES = {
     "McDonald Pass": "46.586,-112.311"
 }
 
-# NWS Hourly Endpoints
+# NWS Hourly Data Endpoints
 LOCATIONS = {
     "4th of July Pass": "https://api.weather.gov/gridpoints/OTX/168,102/forecast/hourly",
     "Lookout Pass": "https://api.weather.gov/gridpoints/MSO/56,102/forecast/hourly",
     "Missoula Valley": "https://api.weather.gov/gridpoints/MSO/86,76/forecast/hourly",
     "McDonald Pass": "https://api.weather.gov/gridpoints/TFX/62,50/forecast/hourly"
+}
+
+# Verification Links (Cameras & NWS Pages)
+LINKS = {
+    "4th of July Pass": {
+        "cam": "https://511.idaho.gov/@FourthofJulySummit",
+        "nws": "https://forecast.weather.gov/MapClick.php?lat=47.548&lon=-116.503"
+    },
+    "Lookout Pass": {
+        "cam": "https://www.mdt.mt.gov/travinfo/kt/cameras.html", # Lookout is in the list
+        "nws": "https://forecast.weather.gov/MapClick.php?lat=47.456&lon=-115.696"
+    },
+    "Missoula Valley": {
+        "cam": "https://www.mdt.mt.gov/travinfo/kt/cameras.html",
+        "nws": "https://forecast.weather.gov/MapClick.php?lat=46.916&lon=-114.090"
+    },
+    "McDonald Pass": {
+        "cam": "https://www.mdt.mt.gov/travinfo/kt/cameras.html",
+        "nws": "https://forecast.weather.gov/MapClick.php?lat=46.586&lon=-112.311"
+    }
 }
 
 # Route Orders
@@ -44,25 +64,20 @@ def fetch_hourly_data(url):
     except:
         return []
 
-@st.cache_data(ttl=300) # Cache alerts for only 5 mins (Urgent!)
+@st.cache_data(ttl=300)
 def fetch_active_alerts(lat_lon_str):
-    """Checks for official NWS Warnings"""
     url = f"https://api.weather.gov/alerts/active?point={lat_lon_str}"
     try:
         headers = {'User-Agent': '(winter-logistics-tool, contact@example.com)'}
         r = requests.get(url, headers=headers, timeout=5)
         r.raise_for_status()
         data = r.json()
-        
         alerts = []
-        features = data.get('features', [])
-        for f in features:
-            props = f['properties']
-            event = props['event']
-            # Filter for meaningful travel hazards
-            if "Winter" in event or "Wind" in event or "Ice" in event or "Blizzard" in event or "Snow" in event:
+        for f in data.get('features', []):
+            event = f['properties']['event']
+            if any(x in event for x in ["Winter", "Wind", "Ice", "Blizzard", "Snow", "Flood"]):
                 alerts.append(event.upper())
-        return list(set(alerts)) # Remove duplicates
+        return list(set(alerts))
     except:
         return []
 
@@ -94,11 +109,19 @@ def analyze_hour(row, location_name, trip_direction):
     major_reasons = []
     
     temp = row['temperature']
+    
+    # Fog Logic (Dewpoint Spread)
+    dewpoint = get_int(row.get('dewpoint', {}).get('value', 0))
+    # NWS Dewpoint is usually Celsius, convert to F if needed, but API usually sends matching units.
+    # Actually NWS gridpoints usually sends 'wmoUnit:degC' for dewpoint even if Temp is F.
+    # For safety, let's rely on the text forecast for Fog unless we parse units deeply.
+    # SIMPLIFIED: If the ShortForecast mentions Fog, use it.
+    
     short_forecast = row['shortForecast'].lower()
     direction = row['windDirection']
     is_daytime = row['isDaytime']
     
-    # WIND LOGIC
+    # WIND
     sustained = get_int(row.get('windSpeed', 0))
     gust = get_int(row.get('windGust', 0))
     effective_wind = max(sustained, gust)
@@ -123,7 +146,7 @@ def analyze_hour(row, location_name, trip_direction):
             risk_score += 1
             alerts.append("🧊 Possible Black Ice")
             major_reasons.append("Black Ice Risk")
-        
+            
     # 2. Wind
     if effective_wind >= 45:
         risk_score += 2
@@ -170,20 +193,20 @@ def analyze_hour(row, location_name, trip_direction):
 # --- UI START ---
 st.title("🚛 Route Safety Commander")
 
-# Timezone Check
+# Timezone
 try:
     now_pt = pd.Timestamp.now(tz='America/Los_Angeles')
     st.caption(f"Last System Check: {now_pt.strftime('%I:%M %p PT')}")
 except:
     st.caption(f"Last System Check: {datetime.now().strftime('%I:%M %p UTC')}")
 
-# Check Connection
+# Connection Check
 ref_data = fetch_hourly_data(LOCATIONS["McDonald Pass"])
 if not ref_data:
     st.error("Offline. Check connection.")
     st.stop()
 
-# Date Selector
+# Date Logic
 unique_dates = []
 seen_dates = set()
 for p in ref_data:
@@ -195,7 +218,7 @@ for p in ref_data:
 
 selected_date_str = st.selectbox("📅 Plan for:", unique_dates[:5])
 
-# --- ALERT & DATA PROCESSING ---
+# --- PROCESSING ---
 daily_risks = []
 processed_data_out = {}
 processed_data_ret = {}
@@ -203,18 +226,17 @@ summary_hazards = set()
 official_alerts_found = []
 
 for name, url in LOCATIONS.items():
-    # 1. Check Official Alerts (The "Governor")
+    # Alerts
     lat_lon = COORDINATES.get(name)
     if lat_lon:
         active_alerts = fetch_active_alerts(lat_lon)
         if active_alerts:
             for alert in active_alerts:
                 official_alerts_found.append(f"**{name}:** {alert}")
-                # If Warning, force max risk
                 if "WARNING" in alert: daily_risks.append(3)
                 elif "ADVISORY" in alert or "WATCH" in alert: daily_risks.append(2)
 
-    # 2. Check Hourly Data
+    # Hourly Data
     raw = fetch_hourly_data(url)
     if not raw: continue
     
@@ -231,6 +253,7 @@ for name, url in LOCATIONS.items():
             stat_o, alert_o, score_o, wind_o, pop_o, day_o, reasons_o = analyze_hour(hour, name, "East")
             stat_r, alert_r, score_r, wind_r, pop_r, day_r, reasons_r = analyze_hour(hour, name, "West")
             
+            # Risk Summary Collection
             if h in OUTBOUND_HOURS:
                 if score_o > max_risk: max_risk = score_o
                 if score_o >= 1: 
@@ -271,15 +294,12 @@ for name, url in LOCATIONS.items():
 overall_risk = max(daily_risks) if daily_risks else 0
 
 st.write("---")
-
-# 1. DISPLAY OFFICIAL ALERTS FIRST (Priority)
 if official_alerts_found:
     st.error("🚨 **OFFICIAL NWS ALERTS ACTIVE:**")
     for alert in official_alerts_found:
         st.write(f"- {alert}")
     st.write("---")
 
-# 2. STATUS RATING
 if overall_risk == 0:
     st.success("✅ MISSION STATUS: GO")
     st.caption("No significant weather hazards detected.")
@@ -288,7 +308,6 @@ elif overall_risk == 1:
 elif overall_risk >= 2:
     st.error("🛑 MISSION STATUS: HIGH RISK")
 
-# 3. HOURLY HAZARD SUMMARY
 if overall_risk > 0 and summary_hazards:
     hazard_list = sorted(list(summary_hazards))
     if len(hazard_list) > 4: summary_text = ", ".join(hazard_list[:4]) + "..."
@@ -320,6 +339,10 @@ def render_trip_table(hours_filter, title, location_order, direction_key):
                 with st.expander(f"{header_icon} {name}", expanded=leg_risk):
                     display_df = trip_df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']]
                     st.dataframe(display_df, hide_index=True, use_container_width=True)
+                    
+                    # LINK INJECTION
+                    my_links = LINKS.get(name, {})
+                    st.markdown(f"**Verify:** [📷 Live Camera]({my_links.get('cam')}) | [📄 NWS Forecast]({my_links.get('nws')})")
 
 with tab_out:
     render_trip_table(OUTBOUND_HOURS, f"Eastbound: {selected_date_str}", ORDER_EASTBOUND, "Out")
