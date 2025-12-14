@@ -65,10 +65,11 @@ def calculate_wind_chill(temp_f, speed_mph):
 
 def analyze_hour(row, location_name, trip_direction):
     """
-    trip_direction: 'East' or 'West' (used for Sun Glare logic)
+    Returns risk info AND a specific 'reason' string for the summary
     """
     risk_score = 0
     alerts = []
+    major_reasons = [] # For the top-level summary
     
     temp = row['temperature']
     short_forecast = row['shortForecast'].lower()
@@ -86,24 +87,30 @@ def analyze_hour(row, location_name, trip_direction):
         if temp <= 32:
             risk_score += 2
             alerts.append("❄️ Icy Roads")
+            major_reasons.append("Icy Roads")
         else:
             risk_score += 1
             alerts.append("💧 Slush")
+            major_reasons.append("Slush")
     elif "rain" in short_forecast:
         if temp <= 32:
             risk_score += 3
             alerts.append("🧊 FREEZING RAIN")
+            major_reasons.append("FREEZING RAIN")
         elif temp <= 37:
             risk_score += 1
             alerts.append("🧊 Possible Black Ice")
+            major_reasons.append("Black Ice Risk")
         
     # 2. Wind Risk
     if effective_wind >= 45:
         risk_score += 2
         alerts.append(f"💨 GUSTS {effective_wind} MPH")
+        major_reasons.append(f"High Winds ({effective_wind} mph)")
     elif effective_wind >= 30:
         risk_score += 1
         alerts.append(f"💨 Windy ({effective_wind})")
+        major_reasons.append("Windy conditions")
     elif "breezy" in short_forecast or "windy" in short_forecast:
         if effective_wind < 20: alerts.append("💨 Breezy")
 
@@ -112,27 +119,31 @@ def analyze_hour(row, location_name, trip_direction):
         if direction in ['N', 'NNE', 'NNW', 'S', 'SSE', 'SSW']:
             risk_score += 1
             alerts.append("↔️ CROSSWIND")
+            major_reasons.append("Crosswinds")
 
     # 4. Sun Glare Logic
     hour_int = parser.parse(row['startTime']).hour
     if "sunny" in short_forecast or "clear" in short_forecast:
         if trip_direction == "East" and 7 <= hour_int <= 10:
             alerts.append("😎 Sun Glare")
+            major_reasons.append("Sun Glare")
         if trip_direction == "West" and 15 <= hour_int <= 18:
             alerts.append("😎 Sun Glare")
+            major_reasons.append("Sun Glare")
 
     # 5. Wind Chill
     wc = calculate_wind_chill(temp, effective_wind)
     if wc < 0:
         risk_score += 1
         alerts.append(f"🥶 Chill {int(wc)}°")
+        major_reasons.append("Dangerous Wind Chill")
 
     status = "🟢"
     if risk_score == 1: status = "🟡"
     if risk_score >= 2: status = "🟠"
     if risk_score >= 3: status = "🔴"
     
-    return status, ", ".join(alerts), risk_score, effective_wind, pop, is_daytime
+    return status, ", ".join(alerts), risk_score, effective_wind, pop, is_daytime, major_reasons
 
 # --- UI START ---
 st.title("🚛 Route Safety Commander")
@@ -164,8 +175,9 @@ selected_date_str = st.selectbox("📅 Plan for:", unique_dates[:5])
 
 # --- DATA PROCESSING ---
 daily_risks = []
-processed_data_out = {} # Store processed data for Outbound logic
-processed_data_ret = {} # Store processed data for Return logic
+processed_data_out = {}
+processed_data_ret = {}
+summary_hazards = set() # Store unique hazards for the summary
 
 for name, url in LOCATIONS.items():
     raw = fetch_hourly_data(url)
@@ -182,24 +194,28 @@ for name, url in LOCATIONS.items():
         if date_str == selected_date_str:
             h = dt.hour
             
-            # Analyze for Outbound (East)
-            stat_o, alert_o, score_o, wind_o, pop_o, day_o = analyze_hour(hour, name, "East")
-            # Analyze for Return (West)
-            stat_r, alert_r, score_r, wind_r, pop_r, day_r = analyze_hour(hour, name, "West")
+            # Analyze
+            stat_o, alert_o, score_o, wind_o, pop_o, day_o, reasons_o = analyze_hour(hour, name, "East")
+            stat_r, alert_r, score_r, wind_r, pop_r, day_r, reasons_r = analyze_hour(hour, name, "West")
             
-            # Check Risk for Summary
+            # Check Risk & Collect Summary Reasons
+            # Only count reasons if they happen during drive time!
             if h in OUTBOUND_HOURS:
                 if score_o > max_risk: max_risk = score_o
+                if score_o >= 1: # Only report hazards if Risk is Yellow or higher
+                    for r in reasons_o: summary_hazards.add(f"{r} at {name}")
+            
             if h in RETURN_HOURS:
                 if score_r > max_risk: max_risk = score_r
+                if score_r >= 1:
+                    for r in reasons_r: summary_hazards.add(f"{r} at {name}")
             
             # Formatting
             weather_icon = add_weather_icon(hour['shortForecast'])
-            wind_text = hour['windDirection'] # Use text directly (e.g., "NNW")
+            wind_text = hour['windDirection']
             wind_display = f"{wind_o} {wind_text}"
             time_display = dt.strftime('%I %p')
             
-            # Add Moon if Night
             if not day_o: time_display = f"🌑 {time_display}"
             else: time_display = f"☀️ {time_display}"
 
@@ -229,10 +245,29 @@ overall_risk = max(daily_risks) if daily_risks else 0
 st.write("---")
 if overall_risk == 0:
     st.success("✅ MISSION STATUS: GO")
+    st.caption("No significant weather hazards detected in the forecast.")
 elif overall_risk == 1:
     st.warning("⚠️ MISSION STATUS: CAUTION")
 elif overall_risk >= 2:
     st.error("🛑 MISSION STATUS: HIGH RISK")
+
+# THE SUMMARY ENGINE
+if overall_risk > 0 and summary_hazards:
+    # Group hazards to make them readable
+    # E.g. instead of listing "Wind at McDonald" 5 times, just say it once
+    # Using a set() already deduplicated exact matches, now we list them.
+    
+    # Sort them so they look nice
+    hazard_list = sorted(list(summary_hazards))
+    
+    # Simple logic to shorten the list if it's too long
+    if len(hazard_list) > 4:
+        summary_text = ", ".join(hazard_list[:4]) + "..."
+    else:
+        summary_text = ", ".join(hazard_list)
+        
+    st.info(f"**Primary Hazards:** {summary_text}")
+
 st.write("---")
 
 st.info("🕒 **Note:** All times are **LOCAL** to that specific pass (Pacific for ID, Mountain for MT).")
@@ -251,14 +286,12 @@ def render_trip_table(hours_filter, title, location_order, direction_key):
             trip_df = df[df['Hour'].isin(hours_filter)].copy()
             
             if not trip_df.empty:
-                # Dynamic Column Rename based on direction
                 status_col = f"Status ({direction_key})"
                 alert_col = f"Alerts ({direction_key})"
                 
                 leg_risk = trip_df[status_col].astype(str).str.contains('🔴|🟠').any()
                 header_icon = "⚠️" if leg_risk else "✅"
                 
-                # Rename columns for display
                 trip_df = trip_df.rename(columns={status_col: "Status", alert_col: "Alerts"})
                 
                 with st.expander(f"{header_icon} {name}", expanded=leg_risk):
