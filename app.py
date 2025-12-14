@@ -25,26 +25,6 @@ LOCATIONS = {
     "McDonald Pass": "https://api.weather.gov/gridpoints/TFX/62,50/forecast/hourly"
 }
 
-# --- VERIFICATION LINKS (UPDATED/FIXED) ---
-LINKS = {
-    "4th of July Pass": {
-        "cam": "https://511.idaho.gov/", # ID 511 blocks deep links; Main Map is safest
-        "nws": "https://forecast.weather.gov/MapClick.php?lat=47.548&lon=-116.503"
-    },
-    "Lookout Pass": {
-        "cam": "https://skilookout.com/webcams", # Ski Area cams are HD and stable
-        "nws": "https://forecast.weather.gov/MapClick.php?lat=47.456&lon=-115.696"
-    },
-    "Missoula Valley": {
-        "cam": "https://www.511mt.net/", # Official MT Map
-        "nws": "https://forecast.weather.gov/MapClick.php?lat=46.916&lon=-114.090"
-    },
-    "McDonald Pass": {
-        "cam": "https://www.montana-webcams.com/macdonald-pass-webcam-us-12/", # Reliable feed
-        "nws": "https://forecast.weather.gov/MapClick.php?lat=46.586&lon=-112.311"
-    }
-}
-
 # Route Orders
 ORDER_EASTBOUND = ["4th of July Pass", "Lookout Pass", "Missoula Valley", "McDonald Pass"]
 ORDER_WESTBOUND = ["McDonald Pass", "Missoula Valley", "Lookout Pass", "4th of July Pass"]
@@ -301,4 +281,59 @@ elif overall_risk >= 2:
     st.error("🛑 MISSION STATUS: HIGH RISK")
 
 if overall_risk > 0 and summary_hazards:
-    h
+    hazard_list = sorted(list(summary_hazards))
+    if len(hazard_list) > 4: summary_text = ", ".join(hazard_list[:4]) + "..."
+    else: summary_text = ", ".join(hazard_list)
+    st.info(f"**Hourly Risk Factors:** {summary_text}")
+
+st.write("---")
+st.info("🕒 **Note:** All times are **LOCAL** to that specific pass.")
+
+# --- TABS ---
+tab_out, tab_ret, tab_full = st.tabs(["🚀 Outbound (AM)", "↩️ Return (PM)", "📋 Details"])
+
+def render_trip_table(hours_filter, title, location_order, direction_key):
+    st.subheader(title)
+    data_source = processed_data_out if direction_key == "Out" else processed_data_ret
+    
+    for name in location_order:
+        if name in data_source:
+            df = data_source[name]
+            trip_df = df[df['Hour'].isin(hours_filter)].copy()
+            
+            if not trip_df.empty:
+                status_col = f"Status ({direction_key})"
+                alert_col = f"Alerts ({direction_key})"
+                leg_risk = trip_df[status_col].astype(str).str.contains('🔴|🟠').any()
+                header_icon = "⚠️" if leg_risk else "✅"
+                trip_df = trip_df.rename(columns={status_col: "Status", alert_col: "Alerts"})
+                
+                with st.expander(f"{header_icon} {name}", expanded=leg_risk):
+                    display_df = trip_df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']]
+                    st.dataframe(display_df, hide_index=True, use_container_width=True)
+
+with tab_out:
+    render_trip_table(OUTBOUND_HOURS, f"Eastbound: {selected_date_str}", ORDER_EASTBOUND, "Out")
+
+with tab_ret:
+    render_trip_table(RETURN_HOURS, f"Westbound: {selected_date_str}", ORDER_WESTBOUND, "Ret")
+    
+    if "McDonald Pass" in processed_data_ret:
+        mcd_df = processed_data_ret["McDonald Pass"]
+        late_df = mcd_df[mcd_df['Hour'].isin([16, 17, 18, 19, 20])]
+        if not late_df.empty:
+            min_temp = int(late_df.iloc[0]['Temp'].replace('°',''))
+            if min_temp < 20:
+                st.toast("🥶 Temp drop warning for late return!")
+                st.info(f"Note: McDonald Pass drops to {min_temp}°F by evening.")
+
+with tab_full:
+    st.write("Full 24-hour breakdown.")
+    location_select = st.selectbox("Select Location", list(LOCATIONS.keys()))
+    if location_select in processed_data_out:
+        df = processed_data_out[location_select]
+        df = df.rename(columns={"Status (Out)": "Status", "Alerts (Out)": "Alerts"})
+        st.dataframe(df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']], hide_index=True)
+
+st.markdown("---")
+st.markdown("**Essential Links:** [Idaho 511](https://511.idaho.gov/) | [MDT Maps](https://www.mdt.mt.gov/travinfo/)")
