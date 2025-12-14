@@ -25,6 +25,26 @@ LOCATIONS = {
     "McDonald Pass": "https://api.weather.gov/gridpoints/TFX/62,50/forecast/hourly"
 }
 
+# Verification Links
+LINKS = {
+    "4th of July Pass": {
+        "cam": "https://511.idaho.gov/", 
+        "nws": "https://forecast.weather.gov/MapClick.php?lat=47.548&lon=-116.503"
+    },
+    "Lookout Pass": {
+        "cam": "https://skilookout.com/webcams", 
+        "nws": "https://forecast.weather.gov/MapClick.php?lat=47.456&lon=-115.696"
+    },
+    "Missoula Valley": {
+        "cam": "https://www.511mt.net/", 
+        "nws": "https://forecast.weather.gov/MapClick.php?lat=46.916&lon=-114.090"
+    },
+    "McDonald Pass": {
+        "cam": "https://www.montana-webcams.com/macdonald-pass-webcam-us-12/", 
+        "nws": "https://forecast.weather.gov/MapClick.php?lat=46.586&lon=-112.311"
+    }
+}
+
 # Route Orders
 ORDER_EASTBOUND = ["4th of July Pass", "Lookout Pass", "Missoula Valley", "McDonald Pass"]
 ORDER_WESTBOUND = ["McDonald Pass", "Missoula Valley", "Lookout Pass", "4th of July Pass"]
@@ -207,7 +227,7 @@ selected_date_str = st.selectbox("📅 Plan for:", unique_dates[:5])
 daily_risks = []
 processed_data_out = {}
 processed_data_ret = {}
-summary_hazards = set() # Combined list of hourly risks AND official alerts
+summary_hazards = set() # Combined list of hourly risks
 official_alerts_found = []
 
 for name, url in LOCATIONS.items():
@@ -218,9 +238,7 @@ for name, url in LOCATIONS.items():
         if active_alerts:
             for alert in active_alerts:
                 official_alerts_found.append(f"**{name}:** {alert}")
-                # ADD ALERT TO SUMMARY HAZARDS (The Fix)
-                summary_hazards.add(f"{alert} @ {name}")
-                
+                # We do NOT add the alert text to summary_hazards anymore (Clean Look)
                 if "WARNING" in alert: daily_risks.append(3)
                 elif "ADVISORY" in alert or "WATCH" in alert: daily_risks.append(2)
 
@@ -294,12 +312,16 @@ elif overall_risk == 1:
 elif overall_risk >= 2:
     st.error("🛑 MISSION STATUS: HIGH RISK")
 
+# Official Alert Notification (Simple Text)
+if official_alerts_found:
+    st.markdown("👉 **Action:** Active NWS Alerts detected. See **'🚨 Alerts'** tab.")
+
+# Hourly Risk Summary (Physical Conditions Only)
 if overall_risk > 0 and summary_hazards:
     hazard_list = sorted(list(summary_hazards))
-    # Display up to 5 hazards, then truncate
     if len(hazard_list) > 5: summary_text = ", ".join(hazard_list[:5]) + "..."
     else: summary_text = ", ".join(hazard_list)
-    st.info(f"**Risk Factors:** {summary_text}")
+    st.info(f"**Hourly Risk Factors:** {summary_text}")
 
 st.write("---")
 st.info("🕒 **Note:** All times are **LOCAL** to that specific pass.")
