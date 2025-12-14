@@ -55,7 +55,8 @@ def fetch_active_alerts(lat_lon_str):
         alerts = []
         for f in data.get('features', []):
             event = f['properties']['event']
-            if any(x in event for x in ["Winter", "Wind", "Ice", "Blizzard", "Snow", "Flood"]):
+            # Filter for relevant alerts
+            if any(x in event for x in ["Winter", "Wind", "Ice", "Blizzard", "Snow", "Flood", "Storm"]):
                 alerts.append(event.upper())
         return list(set(alerts))
     except:
@@ -86,7 +87,7 @@ def calculate_wind_chill(temp_f, speed_mph):
 def analyze_hour(row, location_name, trip_direction):
     risk_score = 0
     alerts = []
-    major_reasons = []
+    major_reasons = [] # These are collected for the top summary
     
     temp = row['temperature']
     short_forecast = row['shortForecast'].lower()
@@ -205,6 +206,7 @@ for name, url in LOCATIONS.items():
         if active_alerts:
             for alert in active_alerts:
                 official_alerts_found.append(f"**{name}:** {alert}")
+                # Force Max Risk for Warnings
                 if "WARNING" in alert: daily_risks.append(3)
                 elif "ADVISORY" in alert or "WATCH" in alert: daily_risks.append(2)
 
@@ -225,16 +227,16 @@ for name, url in LOCATIONS.items():
             stat_o, alert_o, score_o, wind_o, pop_o, day_o, reasons_o = analyze_hour(hour, name, "East")
             stat_r, alert_r, score_r, wind_r, pop_r, day_r, reasons_r = analyze_hour(hour, name, "West")
             
-            # Risk Summary Collection
+            # Risk Summary Collection (Only for drive times)
             if h in OUTBOUND_HOURS:
                 if score_o > max_risk: max_risk = score_o
                 if score_o >= 1: 
-                    for r in reasons_o: summary_hazards.add(f"{r} at {name}")
+                    for r in reasons_o: summary_hazards.add(f"{r} ({name})")
             
             if h in RETURN_HOURS:
                 if score_r > max_risk: max_risk = score_r
                 if score_r >= 1:
-                    for r in reasons_r: summary_hazards.add(f"{r} at {name}")
+                    for r in reasons_r: summary_hazards.add(f"{r} ({name})")
             
             # Formatting
             weather_icon = add_weather_icon(hour['shortForecast'])
@@ -266,12 +268,15 @@ for name, url in LOCATIONS.items():
 overall_risk = max(daily_risks) if daily_risks else 0
 
 st.write("---")
+
+# 1. OFFICIAL ALERTS
 if official_alerts_found:
     st.error("🚨 **OFFICIAL NWS ALERTS ACTIVE:**")
     for alert in official_alerts_found:
         st.write(f"- {alert}")
     st.write("---")
 
+# 2. STATUS RATING
 if overall_risk == 0:
     st.success("✅ MISSION STATUS: GO")
     st.caption("No significant weather hazards detected.")
@@ -280,11 +285,19 @@ elif overall_risk == 1:
 elif overall_risk >= 2:
     st.error("🛑 MISSION STATUS: HIGH RISK")
 
-if overall_risk > 0 and summary_hazards:
-    hazard_list = sorted(list(summary_hazards))
-    if len(hazard_list) > 4: summary_text = ", ".join(hazard_list[:4]) + "..."
-    else: summary_text = ", ".join(hazard_list)
-    st.info(f"**Hourly Risk Factors:** {summary_text}")
+# 3. HAZARD SUMMARY (Fixed)
+if overall_risk > 0:
+    if summary_hazards:
+        hazard_list = sorted(list(summary_hazards))
+        # Logic to keep summary concise
+        if len(hazard_list) > 5:
+            summary_text = ", ".join(hazard_list[:5]) + "..."
+        else:
+            summary_text = ", ".join(hazard_list)
+        st.info(f"**⚠️ Hazard Summary:** {summary_text}")
+    else:
+        # Fallback if risk is high but logic didn't capture a reason string
+        st.info("**⚠️ Hazard Summary:** General Winter Conditions detected (Wind/Precip).")
 
 st.write("---")
 st.info("🕒 **Note:** All times are **LOCAL** to that specific pass.")
