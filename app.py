@@ -7,51 +7,46 @@ import math
 import re
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Winter Logistics Pro", page_icon="🚛", layout="centered")
+st.set_page_config(page_title="Route Safety Commander", page_icon="🚛", layout="centered")
 
-# Coordinates (for Alerts)
-COORDINATES = {
-    "4th of July Pass": "47.548,-116.503",
-    "Lookout Pass": "47.456,-115.696",
-    "Missoula Valley": "46.916,-114.090",
-    "McDonald Pass": "46.586,-112.311"
-}
-
-# NWS Hourly Data Endpoints
-LOCATIONS = {
-    "4th of July Pass": "https://api.weather.gov/gridpoints/OTX/168,102/forecast/hourly",
-    "Lookout Pass": "https://api.weather.gov/gridpoints/MSO/56,102/forecast/hourly",
-    "Missoula Valley": "https://api.weather.gov/gridpoints/MSO/86,76/forecast/hourly",
-    "McDonald Pass": "https://api.weather.gov/gridpoints/TFX/62,50/forecast/hourly"
-}
-
-# Verification Links
-LINKS = {
-    "4th of July Pass": {
-        "cam": "https://511.idaho.gov/", 
-        "nws": "https://forecast.weather.gov/MapClick.php?lat=47.548&lon=-116.503"
+# --- ROUTE DATABASE ---
+# This is where we define every route. To add a new city, we just add a block here.
+ROUTES = {
+    "Helena, MT (I-90 East)": {
+        "outbound_hours": [7, 8, 9, 10, 11, 12],
+        "return_hours": [12, 13, 14, 15, 16, 17, 18, 19],
+        "stops_out": ["4th of July Pass", "Lookout Pass", "Missoula Valley", "McDonald Pass"],
+        "stops_ret": ["McDonald Pass", "Missoula Valley", "Lookout Pass", "4th of July Pass"],
+        "coords": {
+            "4th of July Pass": "47.548,-116.503",
+            "Lookout Pass": "47.456,-115.696",
+            "Missoula Valley": "46.916,-114.090",
+            "McDonald Pass": "46.586,-112.311"
+        },
+        "urls": {
+            "4th of July Pass": "https://api.weather.gov/gridpoints/OTX/168,102/forecast/hourly",
+            "Lookout Pass": "https://api.weather.gov/gridpoints/MSO/56,102/forecast/hourly",
+            "Missoula Valley": "https://api.weather.gov/gridpoints/MSO/86,76/forecast/hourly",
+            "McDonald Pass": "https://api.weather.gov/gridpoints/TFX/62,50/forecast/hourly"
+        }
     },
-    "Lookout Pass": {
-        "cam": "https://skilookout.com/webcams", 
-        "nws": "https://forecast.weather.gov/MapClick.php?lat=47.456&lon=-115.696"
-    },
-    "Missoula Valley": {
-        "cam": "https://www.511mt.net/", 
-        "nws": "https://forecast.weather.gov/MapClick.php?lat=46.916&lon=-114.090"
-    },
-    "McDonald Pass": {
-        "cam": "https://www.montana-webcams.com/macdonald-pass-webcam-us-12/", 
-        "nws": "https://forecast.weather.gov/MapClick.php?lat=46.586&lon=-112.311"
+    "Pullman, WA (US-95 South)": {
+        "outbound_hours": [9, 10, 11, 12],
+        "return_hours": [12, 13, 14],
+        "stops_out": ["Mica Grade", "Harvard Hill", "Moscow/Pullman"],
+        "stops_ret": ["Moscow/Pullman", "Harvard Hill", "Mica Grade"],
+        "coords": {
+            "Mica Grade": "47.591,-116.835",     # US-95 South of CDA
+            "Harvard Hill": "46.950,-116.660",   # US-95 near Laird Park
+            "Moscow/Pullman": "46.732,-117.000"  # Hwy 8/270 Corridor
+        },
+        "urls": {
+            "Mica Grade": "https://api.weather.gov/gridpoints/OTX/161,97/forecast/hourly",
+            "Harvard Hill": "https://api.weather.gov/gridpoints/OTX/168,68/forecast/hourly",
+            "Moscow/Pullman": "https://api.weather.gov/gridpoints/OTX/158,55/forecast/hourly"
+        }
     }
 }
-
-# Route Orders
-ORDER_EASTBOUND = ["4th of July Pass", "Lookout Pass", "Missoula Valley", "McDonald Pass"]
-ORDER_WESTBOUND = ["McDonald Pass", "Missoula Valley", "Lookout Pass", "4th of July Pass"]
-
-# Travel Windows
-OUTBOUND_HOURS = [7, 8, 9, 10, 11, 12]
-RETURN_HOURS = [12, 13, 14, 15, 16, 17, 18, 19]
 
 # --- LOGIC ENGINE ---
 @st.cache_data(ttl=900) 
@@ -154,12 +149,11 @@ def analyze_hour(row, location_name, trip_direction):
     elif "breezy" in short_forecast or "windy" in short_forecast:
         if effective_wind < 20: alerts.append("💨 Breezy")
 
-    # 3. Crosswind
-    if "McDonald" in location_name and effective_wind > 20:
-        if direction in ['N', 'NNE', 'NNW', 'S', 'SSE', 'SSW']:
-            risk_score += 1
-            alerts.append("↔️ CROSSWIND")
-            major_reasons.append("Crosswinds")
+    # 3. Crosswind (Specific to McDonald Pass mostly, but Palouse gets it too)
+    if ("McDonald" in location_name or "Pullman" in location_name) and effective_wind > 25:
+        risk_score += 1
+        alerts.append("↔️ CROSSWIND")
+        major_reasons.append("Crosswinds")
 
     # 4. Sun Glare
     try:
@@ -191,7 +185,19 @@ def analyze_hour(row, location_name, trip_direction):
 # --- UI START ---
 st.title("🚛 Route Safety Commander")
 
-# Timezone
+# 1. SELECT ROUTE
+route_name = st.selectbox("Select Destination", list(ROUTES.keys()))
+route_data = ROUTES[route_name]
+
+# Load Route Specifics
+LOCATIONS = route_data["urls"]
+COORDINATES = route_data["coords"]
+ORDER_EASTBOUND = route_data["stops_out"]
+ORDER_WESTBOUND = route_data["stops_ret"]
+OUTBOUND_HOURS = route_data["outbound_hours"]
+RETURN_HOURS = route_data["return_hours"]
+
+# Timezone Check
 try:
     now_pt = pd.Timestamp.now(tz='America/Los_Angeles')
     st.caption(f"Last System Check: {now_pt.strftime('%I:%M %p PT')}")
@@ -199,7 +205,10 @@ except:
     st.caption(f"Last System Check: {datetime.now().strftime('%I:%M %p UTC')}")
 
 # Connection Check
-ref_data = fetch_hourly_data(LOCATIONS["McDonald Pass"])
+# We check the first URL in the list to get valid dates
+ref_url = list(LOCATIONS.values())[0]
+ref_data = fetch_hourly_data(ref_url)
+
 if not ref_data:
     st.error("Offline. Check connection.")
     st.stop()
@@ -227,7 +236,7 @@ selected_date_str = st.selectbox("📅 Plan for:", unique_dates[:5])
 daily_risks = []
 processed_data_out = {}
 processed_data_ret = {}
-summary_hazards = set() # Combined list of hourly risks
+summary_hazards = set()
 official_alerts_found = []
 
 for name, url in LOCATIONS.items():
@@ -238,7 +247,6 @@ for name, url in LOCATIONS.items():
         if active_alerts:
             for alert in active_alerts:
                 official_alerts_found.append(f"**{name}:** {alert}")
-                # We do NOT add the alert text to summary_hazards anymore (Clean Look)
                 if "WARNING" in alert: daily_risks.append(3)
                 elif "ADVISORY" in alert or "WATCH" in alert: daily_risks.append(2)
 
@@ -312,11 +320,11 @@ elif overall_risk == 1:
 elif overall_risk >= 2:
     st.error("🛑 MISSION STATUS: HIGH RISK")
 
-# Official Alert Notification (Simple Text)
+# Official Alert Notification
 if official_alerts_found:
     st.markdown("👉 **Action:** Active NWS Alerts detected. See **'🚨 Alerts'** tab.")
 
-# Hourly Risk Summary (Physical Conditions Only)
+# Hourly Risk Summary
 if overall_risk > 0 and summary_hazards:
     hazard_list = sorted(list(summary_hazards))
     if len(hazard_list) > 5: summary_text = ", ".join(hazard_list[:5]) + "..."
@@ -324,7 +332,7 @@ if overall_risk > 0 and summary_hazards:
     st.info(f"**Hourly Risk Factors:** {summary_text}")
 
 st.write("---")
-st.info("🕒 **Note:** All times are **LOCAL** to that specific pass.")
+st.info(f"🕒 **Note:** Times are local. Route: {route_name}")
 
 # --- TABS ---
 tab_out, tab_ret, tab_alerts, tab_full = st.tabs(["🚀 Outbound", "↩️ Return", "🚨 Alerts", "📋 Details"])
@@ -350,12 +358,13 @@ def render_trip_table(hours_filter, title, location_order, direction_key):
                     st.dataframe(display_df, hide_index=True, use_container_width=True)
 
 with tab_out:
-    render_trip_table(OUTBOUND_HOURS, f"Eastbound: {selected_date_str}", ORDER_EASTBOUND, "Out")
+    render_trip_table(OUTBOUND_HOURS, f"Outbound: {selected_date_str}", ORDER_EASTBOUND, "Out")
 
 with tab_ret:
-    render_trip_table(RETURN_HOURS, f"Westbound: {selected_date_str}", ORDER_WESTBOUND, "Ret")
+    render_trip_table(RETURN_HOURS, f"Return: {selected_date_str}", ORDER_WESTBOUND, "Ret")
     
-    if "McDonald Pass" in processed_data_ret:
+    # Specific Survival Checks based on Route
+    if "McDonald Pass" in processed_data_ret and "Helena" in route_name:
         mcd_df = processed_data_ret["McDonald Pass"]
         late_df = mcd_df[mcd_df['Hour'].isin([16, 17, 18, 19, 20])]
         if not late_df.empty:
@@ -383,4 +392,4 @@ with tab_full:
         st.dataframe(df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']], hide_index=True)
 
 st.markdown("---")
-st.markdown("**Essential Links:** [Idaho 511](https://511.idaho.gov/) | [MDT Maps](https://www.mdt.mt.gov/travinfo/)")
+st.markdown("**Essential Links:** [Idaho 511](https://511.idaho.gov/) | [MDT Maps](https://www.mdt.mt.gov/travinfo/) | [WSDOT](https://wsdot.com/Travel/Real-time/Map/)")
