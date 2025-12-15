@@ -10,7 +10,6 @@ import re
 st.set_page_config(page_title="Route Safety Commander", page_icon="🚛", layout="centered")
 
 # --- ROUTE DATABASE ---
-# This is where we define every route. To add a new city, we just add a block here.
 ROUTES = {
     "Helena, MT (I-90 East)": {
         "outbound_hours": [7, 8, 9, 10, 11, 12],
@@ -30,20 +29,72 @@ ROUTES = {
             "McDonald Pass": "https://api.weather.gov/gridpoints/TFX/62,50/forecast/hourly"
         }
     },
+    "Whitefish, MT (via St. Regis)": {
+        "outbound_hours": [7, 8, 9, 10, 11],
+        "return_hours": [13, 14, 15, 16, 17],
+        "stops_out": ["4th of July Pass", "Lookout Pass", "St. Regis Canyon", "Polson Hill", "Whitefish"],
+        "stops_ret": ["Whitefish", "Polson Hill", "St. Regis Canyon", "Lookout Pass", "4th of July Pass"],
+        "coords": {
+            "4th of July Pass": "47.548,-116.503",
+            "Lookout Pass": "47.456,-115.696",
+            "St. Regis Canyon": "47.300,-115.100", 
+            "Polson Hill": "47.693,-114.163",     
+            "Whitefish": "48.411,-114.341"
+        },
+        "urls": {
+            "4th of July Pass": "https://api.weather.gov/gridpoints/OTX/168,102/forecast/hourly",
+            "Lookout Pass": "https://api.weather.gov/gridpoints/MSO/56,102/forecast/hourly",
+            "St. Regis Canyon": "https://api.weather.gov/gridpoints/MSO/46,95/forecast/hourly",
+            "Polson Hill": "https://api.weather.gov/gridpoints/MSO/77,118/forecast/hourly",
+            "Whitefish": "https://api.weather.gov/gridpoints/MSO/73,139/forecast/hourly"
+        }
+    },
     "Pullman, WA (US-95 South)": {
         "outbound_hours": [9, 10, 11, 12],
         "return_hours": [12, 13, 14],
         "stops_out": ["Mica Grade", "Harvard Hill", "Moscow/Pullman"],
         "stops_ret": ["Moscow/Pullman", "Harvard Hill", "Mica Grade"],
         "coords": {
-            "Mica Grade": "47.591,-116.835",     # US-95 South of CDA
-            "Harvard Hill": "46.950,-116.660",   # US-95 near Laird Park
-            "Moscow/Pullman": "46.732,-117.000"  # Hwy 8/270 Corridor
+            "Mica Grade": "47.591,-116.835",     
+            "Harvard Hill": "46.950,-116.660",   
+            "Moscow/Pullman": "46.732,-117.000"  
         },
         "urls": {
             "Mica Grade": "https://api.weather.gov/gridpoints/OTX/161,97/forecast/hourly",
             "Harvard Hill": "https://api.weather.gov/gridpoints/OTX/168,68/forecast/hourly",
             "Moscow/Pullman": "https://api.weather.gov/gridpoints/OTX/158,55/forecast/hourly"
+        }
+    },
+    "Lewiston, ID (US-95 South)": {
+        "outbound_hours": [8, 9, 10, 11, 12],
+        "return_hours": [13, 14, 15, 16, 17],
+        "stops_out": ["Mica Grade", "Harvard Hill", "Lewiston Grade"],
+        "stops_ret": ["Lewiston Grade", "Harvard Hill", "Mica Grade"],
+        "coords": {
+            "Mica Grade": "47.591,-116.835",
+            "Harvard Hill": "46.950,-116.660",
+            "Lewiston Grade": "46.460,-116.980"
+        },
+        "urls": {
+            "Mica Grade": "https://api.weather.gov/gridpoints/OTX/161,97/forecast/hourly",
+            "Harvard Hill": "https://api.weather.gov/gridpoints/OTX/168,68/forecast/hourly",
+            "Lewiston Grade": "https://api.weather.gov/gridpoints/OTX/162,38/forecast/hourly"
+        }
+    },
+    "Colville, WA (US-395 North)": {
+        "outbound_hours": [8, 9, 10, 11],
+        "return_hours": [12, 13, 14, 15],
+        "stops_out": ["Deer Park", "Chewelah", "Colville"],
+        "stops_ret": ["Colville", "Chewelah", "Deer Park"],
+        "coords": {
+            "Deer Park": "47.950,-117.470", 
+            "Chewelah": "48.270,-117.710",   
+            "Colville": "48.540,-117.900"    
+        },
+        "urls": {
+            "Deer Park": "https://api.weather.gov/gridpoints/OTX/136,110/forecast/hourly",
+            "Chewelah": "https://api.weather.gov/gridpoints/OTX/130,123/forecast/hourly",
+            "Colville": "https://api.weather.gov/gridpoints/OTX/124,133/forecast/hourly"
         }
     }
 }
@@ -149,8 +200,8 @@ def analyze_hour(row, location_name, trip_direction):
     elif "breezy" in short_forecast or "windy" in short_forecast:
         if effective_wind < 20: alerts.append("💨 Breezy")
 
-    # 3. Crosswind (Specific to McDonald Pass mostly, but Palouse gets it too)
-    if ("McDonald" in location_name or "Pullman" in location_name) and effective_wind > 25:
+    # 3. Crosswind
+    if ("McDonald" in location_name or "Pullman" in location_name or "Lewiston" in location_name or "Polson" in location_name) and effective_wind > 25:
         risk_score += 1
         alerts.append("↔️ CROSSWIND")
         major_reasons.append("Crosswinds")
@@ -165,6 +216,12 @@ def analyze_hour(row, location_name, trip_direction):
             if trip_direction == "West" and 15 <= hour_int <= 18:
                 alerts.append("😎 Sun Glare")
                 major_reasons.append("Sun Glare")
+            # Southbound glare (Morning)
+            if trip_direction == "Out" and "South" in route_name and 8 <= hour_int <= 11:
+                 alerts.append("😎 Sun Glare")
+            # Northbound glare (Morning)
+            if trip_direction == "Out" and "Whitefish" in route_name and 9 <= hour_int <= 12:
+                 alerts.append("😎 Sun Glare")
     except:
         pass 
 
@@ -205,7 +262,6 @@ except:
     st.caption(f"Last System Check: {datetime.now().strftime('%I:%M %p UTC')}")
 
 # Connection Check
-# We check the first URL in the list to get valid dates
 ref_url = list(LOCATIONS.values())[0]
 ref_data = fetch_hourly_data(ref_url)
 
@@ -265,10 +321,9 @@ for name, url in LOCATIONS.items():
             
             if date_str == selected_date_str:
                 h = dt.hour
-                stat_o, alert_o, score_o, wind_o, pop_o, day_o, reasons_o = analyze_hour(hour, name, "East")
-                stat_r, alert_r, score_r, wind_r, pop_r, day_r, reasons_r = analyze_hour(hour, name, "West")
+                stat_o, alert_o, score_o, wind_o, pop_o, day_o, reasons_o = analyze_hour(hour, name, "Out" if "South" in route_name else "East")
+                stat_r, alert_r, score_r, wind_r, pop_r, day_r, reasons_r = analyze_hour(hour, name, "Ret" if "South" in route_name else "West")
                 
-                # Risk Summary Collection (Hourly)
                 if h in OUTBOUND_HOURS:
                     if score_o > max_risk: max_risk = score_o
                     if score_o >= 1: 
