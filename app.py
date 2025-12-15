@@ -179,7 +179,7 @@ def analyze_hour(row, location_name, trip_direction, overall_direction):
     effective_wind = max(sustained, gust)
     pop = get_int(row.get('probabilityOfPrecipitation', 0))
     
-    # 1. Road Surface (UPDATED: Heavy Snow Logic)
+    # 1. Road Surface (Heavy Snow Logic)
     if "heavy snow" in short_forecast:
         risk_score += 3
         alerts.append("❄️ HEAVY SNOW")
@@ -205,7 +205,7 @@ def analyze_hour(row, location_name, trip_direction, overall_direction):
             
     # 2. Wind
     if effective_wind >= 50:
-        risk_score += 3 # Upgraded to Red for 50+
+        risk_score += 3 
         alerts.append(f"💨 STORM GUSTS {effective_wind} MPH")
         major_reasons.append(f"Severe Winds ({effective_wind} mph)")
     elif effective_wind >= 40:
@@ -225,7 +225,7 @@ def analyze_hour(row, location_name, trip_direction, overall_direction):
         alerts.append("↔️ CROSSWIND")
         major_reasons.append("Crosswinds")
 
-    # 4. Sun Glare (UPDATED: Uses Route Config Direction)
+    # 4. Sun Glare
     try:
         hour_int = parser.parse(row['startTime']).hour
         if "sunny" in short_forecast or "clear" in short_forecast:
@@ -392,6 +392,7 @@ st.write("---")
 
 if overall_risk == 0:
     st.success("✅ MISSION STATUS: GO")
+    st.caption("No significant weather hazards detected.")
 elif overall_risk == 1:
     st.warning("⚠️ MISSION STATUS: CAUTION")
 elif overall_risk >= 2:
@@ -413,4 +414,49 @@ st.write("---")
 # --- TABS ---
 tab_out, tab_ret, tab_alerts, tab_full = st.tabs(["🚀 Outbound", "↩️ Return", "🚨 Alerts", "📋 Details"])
 
-def render_trip
+def render_trip_table(hours_filter, title, location_order, direction_key):
+    st.subheader(title)
+    data_source = processed_data_out if direction_key == "Out" else processed_data_ret
+    
+    for name in location_order:
+        if name in data_source:
+            df = data_source[name]
+            trip_df = df[df['Hour'].isin(hours_filter)].copy()
+            
+            if not trip_df.empty:
+                status_col = f"Status ({direction_key})"
+                alert_col = f"Alerts ({direction_key})"
+                leg_risk = trip_df[status_col].astype(str).str.contains('🔴|🟠').any()
+                header_icon = "⚠️" if leg_risk else "✅"
+                trip_df = trip_df.rename(columns={status_col: "Status", alert_col: "Alerts"})
+                
+                with st.expander(f"{header_icon} {name}", expanded=leg_risk):
+                    display_df = trip_df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']]
+                    st.dataframe(display_df, hide_index=True, use_container_width=True)
+
+with tab_out:
+    render_trip_table(OUTBOUND_HOURS, f"Outbound: {selected_date_str}", ORDER_EASTBOUND, "Out")
+
+with tab_ret:
+    render_trip_table(RETURN_HOURS, f"Return: {selected_date_str}", ORDER_WESTBOUND, "Ret")
+
+with tab_alerts:
+    st.subheader("Official NWS Watches & Warnings")
+    if official_alerts_found:
+        st.error("🚨 **ACTIVE ALERTS DETECTED:**")
+        for alert in official_alerts_found:
+            st.write(f"- {alert}")
+        st.caption("These are legal warnings issued by the National Weather Service.")
+    else:
+        st.success("✅ No active NWS Watches or Warnings for your route.")
+
+with tab_full:
+    st.write("Full 24-hour breakdown.")
+    location_select = st.selectbox("Select Location", list(LOCATIONS.keys()))
+    if location_select in processed_data_out:
+        df = processed_data_out[location_select]
+        df = df.rename(columns={"Status (Out)": "Status", "Alerts (Out)": "Alerts"})
+        st.dataframe(df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']], hide_index=True)
+
+st.markdown("---")
+st.markdown("**Essential Links:** [Idaho 511](https://511.idaho.gov/) | [MDT Maps](https://www.mdt.mt.gov/travinfo/) | [WSDOT](https://wsdot.com/Travel/Real-time/Map/)")
