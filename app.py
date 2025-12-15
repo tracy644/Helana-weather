@@ -10,7 +10,6 @@ import re
 st.set_page_config(page_title="Route Safety Commander", page_icon="🚛", layout="centered")
 
 # --- ROUTE DATABASE ---
-# Added 'direction' for Sun Glare logic and 'note' for driver context
 ROUTES = {
     "Helena, MT (I-90 East)": {
         "direction": "East",
@@ -30,6 +29,25 @@ ROUTES = {
             "Lookout Pass": "https://api.weather.gov/gridpoints/MSO/56,102/forecast/hourly",
             "Missoula Valley": "https://api.weather.gov/gridpoints/MSO/86,76/forecast/hourly",
             "McDonald Pass": "https://api.weather.gov/gridpoints/TFX/62,50/forecast/hourly"
+        }
+    },
+    "DAA Auction (Airway Heights, WA)": {
+        "direction": "West",
+        "note": "⚠️ West Plains Hazard: High wind and drifting snow common after Sunset Hill.",
+        "outbound_hours": [8, 9, 10, 11],
+        "return_hours": [12, 13, 14, 15],
+        "stops_out": ["State Line", "Sunset Hill", "West Plains (DAA)"],
+        "stops_ret": ["West Plains (DAA)", "Sunset Hill", "State Line"],
+        "coords": {
+            "State Line": "47.690,-117.040",      # I-90 Entry to WA
+            "Sunset Hill": "47.650,-117.450",     # Steep grade leaving Spokane
+            "West Plains (DAA)": "47.630,-117.570" # Airway Heights Auction Area
+        },
+        "urls": {
+            # Using points endpoints allows the app to find the grid automatically
+            "State Line": "https://api.weather.gov/points/47.690,-117.040",
+            "Sunset Hill": "https://api.weather.gov/points/47.650,-117.450",
+            "West Plains (DAA)": "https://api.weather.gov/points/47.630,-117.570"
         }
     },
     "Whitefish, MT (via St. Regis)": {
@@ -115,6 +133,14 @@ ROUTES = {
 def fetch_hourly_data(url):
     try:
         headers = {'User-Agent': '(winter-logistics-tool, contact@example.com)'}
+        
+        # SMART FETCH: If URL is a 'points' URL, look up the grid first
+        if "points" in url and "gridpoints" not in url:
+            r_meta = requests.get(url, headers=headers, timeout=5)
+            r_meta.raise_for_status()
+            # Extract the hourly forecast link dynamically
+            url = r_meta.json()['properties']['forecastHourly']
+            
         r = requests.get(url, headers=headers, timeout=5)
         r.raise_for_status()
         return r.json().get('properties', {}).get('periods', [])
@@ -179,7 +205,7 @@ def analyze_hour(row, location_name, trip_direction, overall_direction):
     effective_wind = max(sustained, gust)
     pop = get_int(row.get('probabilityOfPrecipitation', 0))
     
-    # 1. Road Surface (Heavy Snow Logic)
+    # 1. Road Surface
     if "heavy snow" in short_forecast:
         risk_score += 3
         alerts.append("❄️ HEAVY SNOW")
@@ -220,7 +246,7 @@ def analyze_hour(row, location_name, trip_direction, overall_direction):
         if effective_wind < 20: alerts.append("💨 Breezy")
 
     # 3. Crosswind
-    if ("McDonald" in location_name or "Pullman" in location_name or "Lewiston" in location_name or "Polson" in location_name) and effective_wind > 25:
+    if ("McDonald" in location_name or "Pullman" in location_name or "Lewiston" in location_name or "West Plains" in location_name) and effective_wind > 25:
         risk_score += 1
         alerts.append("↔️ CROSSWIND")
         major_reasons.append("Crosswinds")
@@ -230,7 +256,7 @@ def analyze_hour(row, location_name, trip_direction, overall_direction):
         hour_int = parser.parse(row['startTime']).hour
         if "sunny" in short_forecast or "clear" in short_forecast:
             # East/West Glare (I-90)
-            if overall_direction == "East":
+            if overall_direction == "East" or overall_direction == "West":
                 if trip_direction == "Out" and 7 <= hour_int <= 10: alerts.append("😎 Sun Glare")
                 if trip_direction == "Ret" and 15 <= hour_int <= 18: alerts.append("😎 Sun Glare")
             
