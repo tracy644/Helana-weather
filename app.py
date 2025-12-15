@@ -10,8 +10,11 @@ import re
 st.set_page_config(page_title="Route Safety Commander", page_icon="🚛", layout="centered")
 
 # --- ROUTE DATABASE ---
+# Added 'direction' for Sun Glare logic and 'note' for driver context
 ROUTES = {
     "Helena, MT (I-90 East)": {
+        "direction": "East",
+        "note": "⚠️ Mountain Passes: McDonald Pass gusts often exceed 60 mph.",
         "outbound_hours": [7, 8, 9, 10, 11, 12],
         "return_hours": [12, 13, 14, 15, 16, 17, 18, 19],
         "stops_out": ["4th of July Pass", "Lookout Pass", "Missoula Valley", "McDonald Pass"],
@@ -30,6 +33,8 @@ ROUTES = {
         }
     },
     "Whitefish, MT (via St. Regis)": {
+        "direction": "North",
+        "note": "⚠️ Rural Route: Limited cell service in St. Regis Canyon.",
         "outbound_hours": [7, 8, 9, 10, 11],
         "return_hours": [13, 14, 15, 16, 17],
         "stops_out": ["4th of July Pass", "Lookout Pass", "St. Regis Canyon", "Polson Hill", "Whitefish"],
@@ -50,6 +55,8 @@ ROUTES = {
         }
     },
     "Pullman, WA (US-95 South)": {
+        "direction": "South",
+        "note": "⚠️ Wind Hazard: High risk of drifting snow on the Palouse (Moscow to Pullman).",
         "outbound_hours": [9, 10, 11, 12],
         "return_hours": [12, 13, 14],
         "stops_out": ["Mica Grade", "Harvard Hill", "Moscow/Pullman"],
@@ -66,6 +73,8 @@ ROUTES = {
         }
     },
     "Lewiston, ID (US-95 South)": {
+        "direction": "South",
+        "note": "⚠️ Steep Grade: 2,000ft drop into Lewiston. Watch for rain/snow transition.",
         "outbound_hours": [8, 9, 10, 11, 12],
         "return_hours": [13, 14, 15, 16, 17],
         "stops_out": ["Mica Grade", "Harvard Hill", "Lewiston Grade"],
@@ -82,6 +91,8 @@ ROUTES = {
         }
     },
     "Colville, WA (US-395 North)": {
+        "direction": "North",
+        "note": "⚠️ Snow Belt: Chewelah area often holds snow when Spokane is raining.",
         "outbound_hours": [8, 9, 10, 11],
         "return_hours": [12, 13, 14, 15],
         "stops_out": ["Deer Park", "Chewelah", "Colville"],
@@ -151,7 +162,7 @@ def calculate_wind_chill(temp_f, speed_mph):
     if temp_f > 50 or speed_mph < 3: return temp_f
     return 35.74 + (0.6215 * temp_f) - (35.75 * math.pow(speed_mph, 0.16)) + (0.4275 * temp_f * math.pow(speed_mph, 0.16))
 
-def analyze_hour(row, location_name, trip_direction):
+def analyze_hour(row, location_name, trip_direction, overall_direction):
     risk_score = 0
     alerts = []
     major_reasons = []
@@ -168,8 +179,12 @@ def analyze_hour(row, location_name, trip_direction):
     effective_wind = max(sustained, gust)
     pop = get_int(row.get('probabilityOfPrecipitation', 0))
     
-    # 1. Road Surface
-    if "snow" in short_forecast or "ice" in short_forecast:
+    # 1. Road Surface (UPDATED: Heavy Snow Logic)
+    if "heavy snow" in short_forecast:
+        risk_score += 3
+        alerts.append("❄️ HEAVY SNOW")
+        major_reasons.append("Heavy Snow")
+    elif "snow" in short_forecast or "ice" in short_forecast:
         if temp <= 32:
             risk_score += 2
             alerts.append("❄️ Icy Roads")
@@ -189,7 +204,11 @@ def analyze_hour(row, location_name, trip_direction):
             major_reasons.append("Black Ice Risk")
             
     # 2. Wind
-    if effective_wind >= 45:
+    if effective_wind >= 50:
+        risk_score += 3 # Upgraded to Red for 50+
+        alerts.append(f"💨 STORM GUSTS {effective_wind} MPH")
+        major_reasons.append(f"Severe Winds ({effective_wind} mph)")
+    elif effective_wind >= 40:
         risk_score += 2
         alerts.append(f"💨 GUSTS {effective_wind} MPH")
         major_reasons.append(f"High Winds ({effective_wind} mph)")
@@ -206,22 +225,20 @@ def analyze_hour(row, location_name, trip_direction):
         alerts.append("↔️ CROSSWIND")
         major_reasons.append("Crosswinds")
 
-    # 4. Sun Glare
+    # 4. Sun Glare (UPDATED: Uses Route Config Direction)
     try:
         hour_int = parser.parse(row['startTime']).hour
         if "sunny" in short_forecast or "clear" in short_forecast:
-            if trip_direction == "East" and 7 <= hour_int <= 10:
-                alerts.append("😎 Sun Glare")
-                major_reasons.append("Sun Glare")
-            if trip_direction == "West" and 15 <= hour_int <= 18:
-                alerts.append("😎 Sun Glare")
-                major_reasons.append("Sun Glare")
-            # Southbound glare (Morning)
-            if trip_direction == "Out" and "South" in route_name and 8 <= hour_int <= 11:
-                 alerts.append("😎 Sun Glare")
-            # Northbound glare (Morning)
-            if trip_direction == "Out" and "Whitefish" in route_name and 9 <= hour_int <= 12:
-                 alerts.append("😎 Sun Glare")
+            # East/West Glare (I-90)
+            if overall_direction == "East":
+                if trip_direction == "Out" and 7 <= hour_int <= 10: alerts.append("😎 Sun Glare")
+                if trip_direction == "Ret" and 15 <= hour_int <= 18: alerts.append("😎 Sun Glare")
+            
+            # South/North Glare (US-95/395)
+            if overall_direction == "South":
+                if trip_direction == "Out" and 8 <= hour_int <= 11: alerts.append("😎 Sun Glare")
+            if overall_direction == "North":
+                if trip_direction == "Out" and 9 <= hour_int <= 12: alerts.append("😎 Sun Glare")
     except:
         pass 
 
@@ -234,7 +251,7 @@ def analyze_hour(row, location_name, trip_direction):
 
     status = "🟢"
     if risk_score == 1: status = "🟡"
-    if risk_score >= 2: status = "🟠"
+    if risk_score == 2: status = "🟠"
     if risk_score >= 3: status = "🔴"
     
     return status, ", ".join(alerts), risk_score, effective_wind, pop, is_daytime, major_reasons
@@ -253,6 +270,8 @@ ORDER_EASTBOUND = route_data["stops_out"]
 ORDER_WESTBOUND = route_data["stops_ret"]
 OUTBOUND_HOURS = route_data["outbound_hours"]
 RETURN_HOURS = route_data["return_hours"]
+ROUTE_DIR = route_data.get("direction", "East")
+ROUTE_NOTE = route_data.get("note", "")
 
 # Timezone Check
 try:
@@ -288,6 +307,10 @@ if not unique_dates:
 
 selected_date_str = st.selectbox("📅 Plan for:", unique_dates[:5])
 
+# Show Route Notes
+if ROUTE_NOTE:
+    st.info(ROUTE_NOTE)
+
 # --- PROCESSING ---
 daily_risks = []
 processed_data_out = {}
@@ -321,8 +344,8 @@ for name, url in LOCATIONS.items():
             
             if date_str == selected_date_str:
                 h = dt.hour
-                stat_o, alert_o, score_o, wind_o, pop_o, day_o, reasons_o = analyze_hour(hour, name, "Out" if "South" in route_name else "East")
-                stat_r, alert_r, score_r, wind_r, pop_r, day_r, reasons_r = analyze_hour(hour, name, "Ret" if "South" in route_name else "West")
+                stat_o, alert_o, score_o, wind_o, pop_o, day_o, reasons_o = analyze_hour(hour, name, "Out", ROUTE_DIR)
+                stat_r, alert_r, score_r, wind_r, pop_r, day_r, reasons_r = analyze_hour(hour, name, "Ret", ROUTE_DIR)
                 
                 if h in OUTBOUND_HOURS:
                     if score_o > max_risk: max_risk = score_o
@@ -369,7 +392,6 @@ st.write("---")
 
 if overall_risk == 0:
     st.success("✅ MISSION STATUS: GO")
-    st.caption("No significant weather hazards detected.")
 elif overall_risk == 1:
     st.warning("⚠️ MISSION STATUS: CAUTION")
 elif overall_risk >= 2:
@@ -387,64 +409,8 @@ if overall_risk > 0 and summary_hazards:
     st.info(f"**Hourly Risk Factors:** {summary_text}")
 
 st.write("---")
-st.info(f"🕒 **Note:** Times are local. Route: {route_name}")
 
 # --- TABS ---
 tab_out, tab_ret, tab_alerts, tab_full = st.tabs(["🚀 Outbound", "↩️ Return", "🚨 Alerts", "📋 Details"])
 
-def render_trip_table(hours_filter, title, location_order, direction_key):
-    st.subheader(title)
-    data_source = processed_data_out if direction_key == "Out" else processed_data_ret
-    
-    for name in location_order:
-        if name in data_source:
-            df = data_source[name]
-            trip_df = df[df['Hour'].isin(hours_filter)].copy()
-            
-            if not trip_df.empty:
-                status_col = f"Status ({direction_key})"
-                alert_col = f"Alerts ({direction_key})"
-                leg_risk = trip_df[status_col].astype(str).str.contains('🔴|🟠').any()
-                header_icon = "⚠️" if leg_risk else "✅"
-                trip_df = trip_df.rename(columns={status_col: "Status", alert_col: "Alerts"})
-                
-                with st.expander(f"{header_icon} {name}", expanded=leg_risk):
-                    display_df = trip_df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']]
-                    st.dataframe(display_df, hide_index=True, use_container_width=True)
-
-with tab_out:
-    render_trip_table(OUTBOUND_HOURS, f"Outbound: {selected_date_str}", ORDER_EASTBOUND, "Out")
-
-with tab_ret:
-    render_trip_table(RETURN_HOURS, f"Return: {selected_date_str}", ORDER_WESTBOUND, "Ret")
-    
-    # Specific Survival Checks based on Route
-    if "McDonald Pass" in processed_data_ret and "Helena" in route_name:
-        mcd_df = processed_data_ret["McDonald Pass"]
-        late_df = mcd_df[mcd_df['Hour'].isin([16, 17, 18, 19, 20])]
-        if not late_df.empty:
-            min_temp = int(late_df.iloc[0]['Temp'].replace('°',''))
-            if min_temp < 20:
-                st.toast("🥶 Temp drop warning for late return!")
-                st.info(f"Note: McDonald Pass drops to {min_temp}°F by evening.")
-
-with tab_alerts:
-    st.subheader("Official NWS Watches & Warnings")
-    if official_alerts_found:
-        st.error("🚨 **ACTIVE ALERTS DETECTED:**")
-        for alert in official_alerts_found:
-            st.write(f"- {alert}")
-        st.caption("These are legal warnings issued by the National Weather Service.")
-    else:
-        st.success("✅ No active NWS Watches or Warnings for your route.")
-
-with tab_full:
-    st.write("Full 24-hour breakdown.")
-    location_select = st.selectbox("Select Location", list(LOCATIONS.keys()))
-    if location_select in processed_data_out:
-        df = processed_data_out[location_select]
-        df = df.rename(columns={"Status (Out)": "Status", "Alerts (Out)": "Alerts"})
-        st.dataframe(df[['Time', 'Temp', 'Precip %', 'Wind from', 'Weather', 'Alerts']], hide_index=True)
-
-st.markdown("---")
-st.markdown("**Essential Links:** [Idaho 511](https://511.idaho.gov/) | [MDT Maps](https://www.mdt.mt.gov/travinfo/) | [WSDOT](https://wsdot.com/Travel/Real-time/Map/)")
+def render_trip
